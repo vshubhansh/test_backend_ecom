@@ -269,12 +269,46 @@ docker compose exec mysql mysql -uecom_app -p ecom \
 docker compose down -v && docker compose up -d
 ```
 
-## 8. Testing _(to be filled — lands with Step 8)_
+## 8. Testing
 
-Planned: Jest + Supertest integration tests against the dockerized MySQL, covering the
-create happy path, insufficient inventory, a **concurrent create race on the last unit**
-(exactly one order must win), cancel + inventory restore, cancel rejection, stepwise
-transitions, skip/backwards rejection, and the worker's batch promotion.
+Jest + Supertest integration tests run against the same dockerized MySQL (`ecom`) the app
+uses — `src/app.js` is imported directly (no `.listen()`, no HTTP hop), so only the
+`mysql` service needs to be up, not the `app` container.
+
+```bash
+docker compose up -d mysql   # only the DB needs to be running
+cp .env.example .env         # if not already present
+npm install
+npm test
+```
+
+**Coverage** (`tests/*.test.js`):
+- `order-create.test.js` — create happy path (single + multi-item); validation 400s
+  (missing field, empty `items[]`, over-cap quantity, `expected_order_value` mismatch);
+  unknown item 404; sold-out item 409; **concurrent create race on the last unit** — 5
+  parallel orders for the single-unit "Last Unit Lamp", exactly one `201` and four `409`s.
+- `order-read.test.js` — list default excludes `CANCELLED`, `?order_status=` filter,
+  `limit`/`offset` pagination, invalid query 400; order detail 200/404/400.
+- `order-cancel.test.js` — cancel restores inventory and writes the history row;
+  double-cancel 409; unknown id 404.
+- `order-status.test.js` — stepwise `PENDING→PROCESSING→SHIPPED→DELIVERED`; skip and
+  backwards transitions rejected 409; disallowed body values (`CANCELLED`/`PENDING`) 400;
+  unknown id 404.
+- `worker.test.js` — `promotePendingOrders()` (the Step 7 tick, called directly — no real
+  timers) promotes every `PENDING` order with `SYSTEM` history rows; zero-`PENDING` tick
+  is a no-op; `runWorkerTick()`'s overlap guard skips a second tick fired before the first
+  resolves. `start()`/`stop()`'s interval-driven behavior isn't re-tested here — it was
+  already manually verified in Step 7 (§10 below); automating it would need fake timers
+  layered over real async DB calls for little added confidence over calling
+  `promotePendingOrders()`/`runWorkerTick()` directly.
+
+**Test DB is the same `ecom` database, deliberately** — `tests/helpers/db.js` resets all
+order-related tables (and restores seeded inventory quantities) before every test, so
+running `npm test` wipes any orders created via the §7 curl walkthrough in that MySQL
+instance. **In a real production setup this would be a separate staging/test database**,
+never the same instance as dev/demo data; here they share one because this is a take-home
+assignment and the `ecom_app` user's grants are scoped to the single `ecom` database (see
+§10's Step 8 entry for the full reasoning).
 
 ## 9. Future scope
 
@@ -430,29 +464,6 @@ what issues were found, and how they were corrected. This log is appended to at 
   order is excluded from the default `GET /order` list and appears under
   `?order_status=CANCELLED`, matching Step 4's filter semantics.
 
-### Step 7 — Background worker (2026-07-12) — Claude Code
-
-- **Used for**: generating `src/workers/order-status-worker.js` — the §5.4 promotion flow
-  (`SELECT ... FOR UPDATE` to snapshot affected ids, a single set-based `UPDATE`, one bulk
-  `INSERT` for the `order_status_history` rows, all in one transaction), the in-process
-  overlap guard, and the `start()`/`stop()` wiring into `src/server.js`'s listen/shutdown
-  lifecycle; then manual verification against the dockerized stack with a shortened interval.
-- **Beyond the plan, added by the AI and kept**: `promotePendingOrders()` (the pure
-  transactional tick) is exported separately from `runWorkerTick()` (the overlap-guarded
-  wrapper the interval calls), so a single tick can be invoked directly without waiting on a
-  real timer — needed for Step 8's tests. `stop()` is `async` and awaits any in-flight tick
-  before returning, so graceful shutdown never races a live transaction against `pool.end()`.
-- **Issues found during verification**: none requiring correction this step — the worker
-  passed all checks on the first build.
-- **Verification performed** (all passed): with `WORKER_INTERVAL_MS=5000`, a freshly created
-  PENDING order flips to `PROCESSING` within one tick (`GET /order/:id`); a matching
-  `order_status_history` row (`PENDING → PROCESSING`, `changed_by='SYSTEM'`) is written; a
-  tick with zero PENDING orders skips the UPDATE/INSERT (logging `promoted 0 order(s)`)
-  within a short read-only transaction; forcing two overlapping ticks confirms the second is skipped
-  (`"previous tick still running"` logged, no duplicate history row); `docker compose stop
-  app` mid-interval still shuts down promptly with no "pool closed" errors, matching Step 2's
-  graceful-shutdown behavior.
-
 ### Step 6 — `PATCH /order/:id/status` (2026-07-12) — Claude Code
 
 - **Used for**: generating `updateOrderStatus` in `src/services/order-service.js` and the
@@ -477,4 +488,60 @@ what issues were found, and how they were corrected. This log is appended to at 
   cancelling a `PENDING` order and then immediately attempting a status update on it → `409`
   (CAS resolves the cancel-vs-status race the same way it resolves cancel-vs-worker).
 
-_(Entries for implementation steps 8–9 will be appended as they land.)_
+### Step 7 — Background worker (2026-07-12) — Claude Code
+
+- **Used for**: generating `src/workers/order-status-worker.js` — the §5.4 promotion flow
+  (`SELECT ... FOR UPDATE` to snapshot affected ids, a single set-based `UPDATE`, one bulk
+  `INSERT` for the `order_status_history` rows, all in one transaction), the in-process
+  overlap guard, and the `start()`/`stop()` wiring into `src/server.js`'s listen/shutdown
+  lifecycle; then manual verification against the dockerized stack with a shortened interval.
+- **Beyond the plan, added by the AI and kept**: `promotePendingOrders()` (the pure
+  transactional tick) is exported separately from `runWorkerTick()` (the overlap-guarded
+  wrapper the interval calls), so a single tick can be invoked directly without waiting on a
+  real timer — needed for Step 8's tests. `stop()` is `async` and awaits any in-flight tick
+  before returning, so graceful shutdown never races a live transaction against `pool.end()`.
+- **Issues found during verification**: none requiring correction this step — the worker
+  passed all checks on the first build.
+- **Verification performed** (all passed): with `WORKER_INTERVAL_MS=5000`, a freshly created
+  PENDING order flips to `PROCESSING` within one tick (`GET /order/:id`); a matching
+  `order_status_history` row (`PENDING → PROCESSING`, `changed_by='SYSTEM'`) is written; a
+  tick with zero PENDING orders skips the UPDATE/INSERT (logging `promoted 0 order(s)`)
+  within a short read-only transaction; forcing two overlapping ticks confirms the second is skipped
+  (`"previous tick still running"` logged, no duplicate history row); `docker compose stop
+  app` mid-interval still shuts down promptly with no "pool closed" errors, matching Step 2's
+  graceful-shutdown behavior.
+
+### Step 8 — Tests (2026-07-12) — Claude Code
+
+- **Used for**: generating `tests/helpers/db.js` (DB reset + assertion helpers) and the
+  five Jest + Supertest suites (`tests/order-create.test.js`, `order-read.test.js`,
+  `order-cancel.test.js`, `order-status.test.js`, `worker.test.js`) plus `jest.config.js`;
+  then running the suite against the dockerized MySQL.
+- **Beyond the plan, added by the AI and kept**: `getInventoryQuantity`/`getStatusHistory`
+  helpers in `tests/helpers/db.js` so tests can assert on state the HTTP API doesn't
+  expose directly (inventory quantities, `order_status_history` rows/`changed_by`)
+  without duplicating raw SQL in every test file.
+- **AI suggestion refined by the author**: the AI's default approach reuses the single
+  `ecom` database for tests (`resetDatabase()` truncates order-related tables and
+  restores seeded inventory before every test — see README §8). Per the author: **in a
+  real production setup, tests would run against a separate staging/test database**,
+  never the same instance dev or demo data lives in; here the two share one purely
+  because this is a take-home assignment and the `ecom_app` user's grants (created by the
+  official `mysql` image, scoped to `MYSQL_DATABASE=ecom`) don't extend to creating a
+  second database — spinning up a dedicated test DB would mean a second compose
+  service/init script for marginal benefit at this scope.
+- **Issues found during verification**: none requiring correction — all suites passed on
+  the first run against the dockerized MySQL, and 5 consecutive re-runs confirmed the
+  concurrent-create-race test is not flaky (exactly one `201` every time).
+- **Verification performed** (all passed): `npm test` — 5 suites, 28 tests green,
+  `<2s` runtime, no Jest open-handle warnings (confirms each suite's `afterAll(() =>
+  pool.end())` closes its own pool cleanly). Covers: create happy path (single/multi-item);
+  validation 400s; unknown-item 404; sold-out-item 409; **5 concurrent orders racing the
+  last unit of item 5 — exactly one `201`, four `409`s, final inventory `0`**; list
+  filter/pagination/400; order detail 200/404/400; cancel + inventory restore + history
+  row; double-cancel 409; unknown id 404; stepwise `PENDING→PROCESSING→SHIPPED→DELIVERED`;
+  skip/backwards transitions 409; disallowed body values 400; worker's `promotePendingOrders()`
+  batch-promotes with `SYSTEM` history rows, zero-`PENDING` tick is a no-op, and
+  `runWorkerTick()`'s overlap guard skips a second tick fired before the first resolves.
+
+_(Entries for implementation step 9 will be appended as it lands.)_

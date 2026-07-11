@@ -189,7 +189,7 @@ Full trade-off analysis in README §4.
 - **Accept**: PENDING orders flip to PROCESSING within one tick with history rows;
   overlapping ticks don't double-run.
 
-### Step 8 — Tests
+### Step 8 — Tests ✅
 - **Files**: `tests/*.test.js`, `jest.config.js`, test DB setup/teardown helpers.
 - **Cases**: create happy path; insufficient inventory 409; **concurrent create race on the
   last unit** (exactly one succeeds); cancel on PENDING incl. inventory restore; cancel
