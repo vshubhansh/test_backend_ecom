@@ -153,7 +153,7 @@ Full trade-off analysis in README §4.
 - **Accept**: `docker compose up` yields a MySQL with the schema + seeds; `mysql` CLI can
   query seeded items.
 
-### Step 2 — App skeleton
+### Step 2 — App skeleton ✅
 - **Files**: `src/server.js`, `src/app.js`, `src/config.js`, `src/db/pool.js`,
   `src/middleware/error-handler.js`, validation setup (zod or joi).
 - **Scope**: Express bootstrap; pool singleton exactly per §1; centralized error middleware

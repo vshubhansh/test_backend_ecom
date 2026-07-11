@@ -1,14 +1,23 @@
-// Step 1 placeholder — keeps the compose stack green until the Express
-// skeleton lands in Step 2, which replaces this file entirely.
-const http = require('node:http');
+const app = require('./app');
+const config = require('./config');
+const { pool } = require('./db/pool');
 
-const port = Number(process.env.PORT) || 3005;
-
-const server = http.createServer((req, res) => {
-  res.writeHead(503, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'app skeleton lands in Step 2' }));
+const server = app.listen(config.port, () => {
+  console.log(`Order processing system listening on :${config.port}`);
 });
 
-server.listen(port, () => {
-  console.log(`[placeholder] listening on :${port}`);
-});
+// Graceful shutdown: stop accepting connections, drain the pool, exit.
+// Without this, `docker compose down` waits for the 10s SIGKILL timeout.
+async function shutdown(signal) {
+  console.log(`${signal} received, shutting down`);
+  server.close(async () => {
+    try {
+      await pool.end();
+    } finally {
+      process.exit(0);
+    }
+  });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

@@ -176,8 +176,10 @@ cp .env.example .env      # adjust ports/passwords if needed
 docker compose up --build -d
 ```
 
-- App: `http://localhost:3005` (placeholder 503 until the Express skeleton lands in Step 2).
-  `APP_PORT` (host side) and `PORT` (container side) are configurable in `.env`.
+- App: `http://localhost:3005`. `APP_PORT` (host side) and `PORT` (container side) are
+  configurable in `.env`.
+- Smoke test: `curl localhost:3005/health` → `200 {"status":"ok","db":"up"}`
+  (`503 {"status":"degraded","db":"down"}` if MySQL is unreachable).
 - MySQL 8.4: `localhost:3306`, database `ecom`, app user `ecom_app` (credentials in `.env`).
   Seeded with 6 items, including one with a single unit in stock ("Last Unit Lamp", for the
   concurrency demo) and one out of stock ("Sold Out Speaker", for the 409 demo).
@@ -270,4 +272,21 @@ what issues were found, and how they were corrected. This log is appended to at 
   placeholder app answers on the mapped port; `docker compose down -v && up` re-seeds
   cleanly.
 
-_(Entries for implementation steps 2–9 will be appended as they land.)_
+### Step 2 — App skeleton (2026-07-11) — Claude Code
+
+- **Used for**: generating the Express bootstrap — `src/config.js` (single env reader),
+  `src/db/pool.js` (pool singleton per the locked spec plus a `withTransaction` helper for
+  later steps), `src/errors.js` (typed `AppError` + factories), the centralized error
+  middleware, the zod `validate` middleware factory, `GET /health` with a `SELECT 1` DB
+  probe, `src/app.js` (exported without `listen` so Supertest can import it), and
+  `src/server.js` with graceful SIGTERM/SIGINT shutdown (close server, drain pool).
+- **Issues found during verification**: none requiring correction this step — the skeleton
+  passed all checks on the first build.
+- **Verification performed** (all passed): `/health` → 200 with DB up; unknown route → 404
+  JSON; malformed JSON body → 400 (not a stack trace); stopping MySQL degrades `/health`
+  to 503 without crashing the app, and restarting MySQL recovers it to 200 within seconds
+  **without an app restart** (pool + keep-alive settings doing their job); `docker compose
+  stop app` completes in ~1s with `SIGTERM received, shutting down` logged (graceful
+  shutdown, no 10s kill timeout).
+
+_(Entries for implementation steps 3–9 will be appended as they land.)_
