@@ -167,13 +167,31 @@ harmless (idempotent), but the queue also buys observability, per-order retry se
 horizontal scaling of the processing itself. Deferred to keep the assignment's footprint
 honest.
 
-## 7. Setup & run _(to be filled — lands with Step 1)_
+## 7. Setup & run
+
+Prerequisites: Docker (Desktop) with Compose v2.
 
 ```bash
-# Planned:
-cp .env.example .env
-docker compose up --build
-# API on http://localhost:3000, MySQL 8.4 seeded with sample items + inventory
+cp .env.example .env      # adjust ports/passwords if needed
+docker compose up --build -d
+```
+
+- App: `http://localhost:3005` (placeholder 503 until the Express skeleton lands in Step 2).
+  `APP_PORT` (host side) and `PORT` (container side) are configurable in `.env`.
+- MySQL 8.4: `localhost:3306`, database `ecom`, app user `ecom_app` (credentials in `.env`).
+  Seeded with 6 items, including one with a single unit in stock ("Last Unit Lamp", for the
+  concurrency demo) and one out of stock ("Sold Out Speaker", for the 409 demo).
+
+```bash
+# Inspect the seeded data
+docker compose exec mysql mysql -uecom_app -p ecom \
+  -e "SELECT i.id, i.name, inv.quantity FROM items i JOIN inventory inv ON inv.item_id=i.id;"
+```
+
+**Re-seeding**: `db/init.sql` runs only when the MySQL data volume is empty. To reset:
+
+```bash
+docker compose down -v && docker compose up -d
 ```
 
 ## 8. Testing _(to be filled — lands with Step 8)_
@@ -237,4 +255,19 @@ what issues were found, and how they were corrected. This log is appended to at 
     409 right away. Outcome: CAS retained for row-level transitions, the locking
     alternative documented with its trade-offs in §4.
 
-_(Entries for implementation steps 1–9 will be appended as they land.)_
+### Step 1 — Schema + infra (2026-07-11) — Claude Code
+
+- **Used for**: generating `db/init.sql` (DDL + seed data), `docker-compose.yml`,
+  `Dockerfile`, `.env.example`, and the placeholder server; then verifying the stack
+  end-to-end (containers healthy, tables + seeds present, app reachable).
+- **Issues found during verification, and the corrections**:
+  1. *Compose/app port mismatch risk* — the compose mapping initially hardcoded the
+     container-side port instead of following the app's configured listen port; corrected
+     to `"${APP_PORT}:${PORT}"` so both sides are driven by `.env`.
+- **Verification performed** (all passed): 5 tables + 6 seeded items present; CHECK
+  constraint rejects negative inventory (`ERROR 3819`); FK rejects order_items pointing at
+  a nonexistent order (`ERROR 1452`) — both errors deliberately provoked as negative tests;
+  placeholder app answers on the mapped port; `docker compose down -v && up` re-seeds
+  cleanly.
+
+_(Entries for implementation steps 2–9 will be appended as they land.)_

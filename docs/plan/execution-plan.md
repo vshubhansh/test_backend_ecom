@@ -146,7 +146,7 @@ Full trade-off analysis in README §4.
 - **Accept**: plan covers all steps with scope + acceptance criteria; README has the agreed
   progressive structure and seeded AI-usage log.
 
-### Step 1 — Schema + infra
+### Step 1 — Schema + infra ✅
 - **Files**: `db/init.sql`, `docker-compose.yml`, `.env.example`, `package.json`, `.dockerignore`, `Dockerfile`.
 - **Scope**: 5 tables per §4 with indexes and seed data; MySQL 8.4 service with `init.sql`
   mounted; node app service; healthcheck-gated startup ordering.
