@@ -9,8 +9,8 @@ but how the requirements were analysed, which design discussions happened, what 
 in vs. deferred, and why each choice was made. The engineering checklist version lives in
 [`docs/plan/execution-plan.md`](docs/plan/execution-plan.md).
 
-> **Status**: design phase complete; implementation in progress. Sections marked
-> _(to be filled)_ land with their corresponding build step.
+> **Status**: implementation complete (Steps 0–9). All endpoints, the background worker,
+> and the test suite are built and verified end-to-end per §7/§8 below.
 
 ---
 
@@ -544,4 +544,24 @@ what issues were found, and how they were corrected. This log is appended to at 
   batch-promotes with `SYSTEM` history rows, zero-`PENDING` tick is a no-op, and
   `runWorkerTick()`'s overlap guard skips a second tick fired before the first resolves.
 
-_(Entries for implementation step 9 will be appended as it lands.)_
+### Step 9 — README finalization (2026-07-12) — Claude Code
+
+- **Used for**: closing out the remaining gap between the repo and the Step 9 acceptance bar
+  ("a reviewer can clone → `docker compose up` → exercise every endpoint from the README
+  alone") — most of Step 9's scope (§8 Testing, the Step 8 log entry) had already landed with
+  the Step 8 commit, so this pass was a targeted verification + the two things still
+  outstanding: the stale top-of-file status line and this entry.
+- **Verification performed** (all passed): fresh `docker compose down -v && docker compose
+  up --build -d`, then every §7 curl example run in order — health, place order, sold-out
+  409, unknown-item 404, seeded-inventory inspection, list (default/`?order_status=`/
+  pagination/invalid-400), order detail (200/404), cancel (200/409-on-recancel/404),
+  stepwise status transitions (200×3/skip-409/backwards-409/`CANCELLED`-target-400/
+  unknown-id-404), and the worker promotion walkthrough (`WORKER_INTERVAL_MS=5000`, order
+  flips to `PROCESSING` with a `SYSTEM` history row within one tick) — all matched the
+  documented responses exactly. §8's standalone `npm test` instructions (`docker compose up
+  -d mysql`, `.env`, `npm install`, `npm test`) reproduced the documented result: 5 suites,
+  28 tests, green. Both Mermaid blocks (§2 ERD, §3 state diagram) checked for syntax
+  validity.
+- **Issues found during verification**: none — the walkthrough and test suite matched the
+  README's documented behavior on the first pass; only the status line (§ above) and this
+  log entry needed updating.

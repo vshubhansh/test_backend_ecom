@@ -197,7 +197,7 @@ Full trade-off analysis in README §4.
   + history rows; list filter/pagination semantics.
 - **Accept**: `npm test` green against dockerized MySQL.
 
-### Step 9 — README finalization
+### Step 9 — README finalization ✅
 - **Scope**: fill run instructions, finalize AI-usage log, verify ERD/state diagrams render,
   future-scope section complete.
 - **Accept**: a reviewer can clone → `docker compose up` → exercise every endpoint from the
