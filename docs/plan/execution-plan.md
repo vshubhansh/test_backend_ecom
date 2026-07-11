@@ -166,7 +166,7 @@ Full trade-off analysis in README §4.
 - **Accept**: manual curl of happy path + shortfall path behaves per contract; order,
   order_items, and history rows present.
 
-### Step 4 — Read endpoints
+### Step 4 — Read endpoints ✅
 - **Scope**: `GET /order` (filter, CANCELLED-exclusion default, `limit`/`offset`),
   `GET /order/:id` with items array. Single JOIN-based queries; no N+1.
 - **Accept**: list shapes and filter/pagination semantics per contract; 404 on unknown id.

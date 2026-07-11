@@ -20,4 +20,16 @@ const createOrderSchema = z.object({
   discount: z.number().optional(),
 });
 
-module.exports = { createOrderSchema, orderItemSchema };
+const orderIdParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+});
+
+// Defaults: no page/offset given -> page 1, page size 20 (offset=0, limit=20),
+// per execution-plan.md §3 / README §5.
+const listOrdersQuerySchema = z.object({
+  order_status: z.enum(['PENDING', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED']).optional(),
+  limit: z.coerce.number().int().positive().max(100).optional().default(20),
+  offset: z.coerce.number().int().nonnegative().optional().default(0),
+});
+
+module.exports = { createOrderSchema, orderItemSchema, orderIdParamSchema, listOrdersQuerySchema };

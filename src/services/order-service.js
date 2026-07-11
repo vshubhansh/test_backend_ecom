@@ -1,4 +1,4 @@
-const { withTransaction } = require('../db/pool');
+const { pool, withTransaction } = require('../db/pool');
 const { notFound, badRequest, conflict } = require('../errors');
 
 /**
@@ -129,4 +129,108 @@ async function createOrder({ customer_id, payment_mode, payment_status, items, e
   });
 }
 
-module.exports = { createOrder };
+/**
+ * Fetches one order with its line items via a single JOIN — no read-then-read
+ * per item, per execution-plan.md §6 Step 4's "no N+1" acceptance criterion.
+ */
+async function getOrderById(id) {
+  const [rows] = await pool.execute(
+    `SELECT o.id, o.customer_id, o.status, o.order_value, o.payment_mode, o.payment_status,
+            o.order_date, o.created_at, o.updated_at,
+            oi.item_id, i.name, oi.quantity, oi.item_price, oi.shipment_number
+     FROM orders o
+     JOIN order_items oi ON oi.order_id = o.id
+     JOIN items i ON i.id = oi.item_id
+     WHERE o.id = :id
+     ORDER BY oi.id ASC`,
+    { id }
+  );
+
+  if (rows.length === 0) {
+    throw notFound('Order not found', { id });
+  }
+
+  const first = rows[0];
+  return {
+    id: first.id,
+    customer_id: first.customer_id,
+    status: first.status,
+    order_value: first.order_value,
+    payment_mode: first.payment_mode,
+    payment_status: first.payment_status,
+    order_date: first.order_date,
+    created_at: first.created_at,
+    updated_at: first.updated_at,
+    items: rows.map((r) => ({
+      item_id: r.item_id,
+      name: r.name,
+      quantity: r.quantity,
+      item_price: r.item_price,
+      shipment_number: r.shipment_number,
+    })),
+  };
+}
+
+/**
+ * Lists orders with status filter + pagination. Two queries total regardless
+ * of page size: one page of orders, one batched items lookup keyed by the
+ * page's order ids — avoids an N+1 per-order items query.
+ */
+async function listOrders({ order_status, limit, offset }) {
+  const statusClause = order_status ? 'status = :status' : "status != 'CANCELLED'";
+  // pool.query, not .execute: MySQL server-side prepared statements reject
+  // placeholders in LIMIT/OFFSET (ER_WRONG_ARGUMENTS). query() still binds
+  // params safely (mysql2 escapes them client-side) — limit/offset are
+  // already validated as integers by listOrdersQuerySchema.
+  const [orderRows] = await pool.query(
+    `SELECT id, customer_id, status, order_value, payment_mode, payment_status, order_date
+     FROM orders
+     WHERE ${statusClause}
+     ORDER BY order_date DESC, id DESC
+     LIMIT :limit OFFSET :offset`,
+    { status: order_status, limit, offset }
+  );
+
+  if (orderRows.length === 0) {
+    return [];
+  }
+
+  const orderIds = orderRows.map((o) => o.id);
+  const idParams = {};
+  const idPlaceholders = orderIds
+    .map((id, i) => {
+      idParams[`id${i}`] = id;
+      return `:id${i}`;
+    })
+    .join(', ');
+  const [itemRows] = await pool.execute(
+    `SELECT oi.order_id, oi.item_id, i.name, oi.quantity
+     FROM order_items oi
+     JOIN items i ON i.id = oi.item_id
+     WHERE oi.order_id IN (${idPlaceholders})`,
+    idParams
+  );
+
+  const itemsByOrderId = new Map();
+  for (const row of itemRows) {
+    if (!itemsByOrderId.has(row.order_id)) itemsByOrderId.set(row.order_id, []);
+    itemsByOrderId.get(row.order_id).push({
+      item_id: row.item_id,
+      name: row.name,
+      quantity: row.quantity,
+    });
+  }
+
+  return orderRows.map((o) => ({
+    id: o.id,
+    customer_id: o.customer_id,
+    status: o.status,
+    order_value: o.order_value,
+    payment_mode: o.payment_mode,
+    payment_status: o.payment_status,
+    order_date: o.order_date,
+    items: itemsByOrderId.get(o.id) || [],
+  }));
+}
+
+module.exports = { createOrder, getOrderById, listOrders };

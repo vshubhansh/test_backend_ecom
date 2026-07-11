@@ -200,6 +200,22 @@ docker compose exec mysql mysql -uecom_app -p ecom \
   -e "SELECT i.id, i.name, inv.quantity FROM items i JOIN inventory inv ON inv.item_id=i.id;"
 ```
 
+```bash
+# List orders (default: excludes CANCELLED, page 1 of 20)
+curl -s localhost:3005/order
+# Explicitly retrieve cancelled orders
+curl -s "localhost:3005/order?order_status=CANCELLED"
+# Paginate: second order on the page
+curl -s "localhost:3005/order?limit=1&offset=1"
+# Invalid order_status → 400
+curl -s "localhost:3005/order?order_status=bogus"
+
+# Order detail (items include item_price and shipment_number, unlike the list view)
+curl -s localhost:3005/order/1
+# Unknown id → 404
+curl -s localhost:3005/order/999999
+```
+
 **Re-seeding**: `db/init.sql` runs only when the MySQL data volume is empty. To reset:
 
 ```bash
@@ -326,4 +342,26 @@ what issues were found, and how they were corrected. This log is appended to at 
   `expected_order_value` mismatch → 400 with expected vs. computed; over-cap quantity → 400
   validation error.
 
-_(Entries for implementation steps 4–9 will be appended as they land.)_
+### Step 4 — Read endpoints (2026-07-12) — Claude Code
+
+- **Used for**: generating `GET /order` and `GET /order/:id` in `src/routes/orders.js`,
+  the corresponding `listOrders`/`getOrderById` in `src/services/order-service.js`, and
+  `orderIdParamSchema`/`listOrdersQuerySchema` in `src/schemas/order-schemas.js`; then
+  manual verification against the dockerized stack.
+- **Issues found during verification, and the corrections**:
+  1. *`ER_WRONG_ARGUMENTS` on `GET /order`* — `LIMIT`/`OFFSET` bound as named
+     placeholders through `pool.execute()` (a server-side prepared statement) fail against
+     MySQL 8.4 (`Incorrect arguments to mysqld_stmt_execute`) — a known `mysql2`/MySQL
+     limitation on placeholders in `LIMIT`/`OFFSET`. Fixed by using `pool.query()` for that
+     one query instead; params are still bound (not string-interpolated) and `limit`/
+     `offset` are pre-validated as integers by `listOrdersQuerySchema`, so this keeps the
+     no-string-interpolation rule intact while avoiding the prepared-statement path.
+- **Verification performed** (all passed): `GET /order` with no query excludes CANCELLED and
+  defaults to `limit=20, offset=0`; `?order_status=CANCELLED` returns only cancelled orders
+  (`[]` against current seed/test data — none cancelled yet, pending Step 5); `limit`/
+  `offset` produce non-overlapping pages; `?order_status=bogus` → 400; `GET /order/:id` for
+  an existing order → 200 with full item detail (`item_price`, `shipment_number: null`);
+  `GET /order/999999` → 404; `GET /order/abc` → 400 (non-numeric id rejected by
+  `orderIdParamSchema`'s coercion).
+
+_(Entries for implementation steps 5–9 will be appended as they land.)_
