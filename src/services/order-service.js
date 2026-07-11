@@ -129,27 +129,20 @@ async function createOrder({ customer_id, payment_mode, payment_status, items, e
   });
 }
 
-/**
- * Fetches one order with its line items via a single JOIN — no read-then-read
- * per item, per execution-plan.md §6 Step 4's "no N+1" acceptance criterion.
- */
-async function getOrderById(id) {
-  const [rows] = await pool.execute(
-    `SELECT o.id, o.customer_id, o.status, o.order_value, o.payment_mode, o.payment_status,
-            o.order_date, o.created_at, o.updated_at,
-            oi.item_id, i.name, oi.quantity, oi.item_price, oi.shipment_number
-     FROM orders o
-     JOIN order_items oi ON oi.order_id = o.id
-     JOIN items i ON i.id = oi.item_id
-     WHERE o.id = :id
-     ORDER BY oi.id ASC`,
-    { id }
-  );
+// Shared by getOrderById and cancelOrder: both run the same order+items JOIN
+// and shape the result identically.
+const ORDER_WITH_ITEMS_SQL = `
+  SELECT o.id, o.customer_id, o.status, o.order_value, o.payment_mode, o.payment_status,
+         o.order_date, o.created_at, o.updated_at,
+         oi.item_id, i.name, oi.quantity, oi.item_price, oi.shipment_number
+  FROM orders o
+  JOIN order_items oi ON oi.order_id = o.id
+  JOIN items i ON i.id = oi.item_id
+  WHERE o.id = :id
+  ORDER BY oi.id ASC
+`;
 
-  if (rows.length === 0) {
-    throw notFound('Order not found', { id });
-  }
-
+function mapOrderRows(rows) {
   const first = rows[0];
   return {
     id: first.id,
@@ -169,6 +162,74 @@ async function getOrderById(id) {
       shipment_number: r.shipment_number,
     })),
   };
+}
+
+/**
+ * Fetches one order with its line items via a single JOIN — no read-then-read
+ * per item, per execution-plan.md §6 Step 4's "no N+1" acceptance criterion.
+ */
+async function getOrderById(id) {
+  const [rows] = await pool.execute(ORDER_WITH_ITEMS_SQL, { id });
+
+  if (rows.length === 0) {
+    throw notFound('Order not found', { id });
+  }
+
+  return mapOrderRows(rows);
+}
+
+/**
+ * Cancels a PENDING order: CAS status flip, inventory restore, and history
+ * row, all in one transaction — mirrors createOrder's approach (§5.2 of
+ * docs/plan/execution-plan.md). A cancel/worker race resolves cleanly:
+ * whichever UPDATE lands first wins, the other affects 0 rows and becomes 409.
+ */
+async function cancelOrder(id) {
+  return withTransaction(async (conn) => {
+    const [result] = await conn.execute(
+      "UPDATE orders SET status = 'CANCELLED' WHERE id = :id AND status = 'PENDING'",
+      { id }
+    );
+
+    if (result.affectedRows === 0) {
+      const [existing] = await conn.execute('SELECT status FROM orders WHERE id = :id', { id });
+      if (existing.length === 0) {
+        throw notFound('Order not found', { id });
+      }
+      throw conflict('Order is not PENDING and cannot be cancelled', {
+        id,
+        status: existing[0].status,
+      });
+    }
+
+    // Ascending item_id: same lock-ordering convention createOrder uses for
+    // its decrements, to avoid InnoDB deadlocks with concurrent orders.
+    const [itemRows] = await conn.execute(
+      'SELECT item_id, quantity FROM order_items WHERE order_id = :id ORDER BY item_id ASC',
+      { id }
+    );
+
+    for (const { item_id, quantity } of itemRows) {
+      const [restore] = await conn.execute(
+        'UPDATE inventory SET quantity = quantity + :qty WHERE item_id = :itemId',
+        { qty: quantity, itemId: item_id }
+      );
+      if (restore.affectedRows === 0) {
+        // createOrder decremented this row, so it must exist; a miss means the
+        // inventory table lost a row and the restore must not be half-applied.
+        throw new Error(`Inventory row missing for item ${item_id} while cancelling order ${id}`);
+      }
+    }
+
+    await conn.execute(
+      `INSERT INTO order_status_history (order_id, from_status, to_status, changed_by)
+       VALUES (:id, 'PENDING', 'CANCELLED', 'CUSTOMER')`,
+      { id }
+    );
+
+    const [rows] = await conn.execute(ORDER_WITH_ITEMS_SQL, { id });
+    return mapOrderRows(rows);
+  });
 }
 
 /**
@@ -233,4 +294,4 @@ async function listOrders({ order_status, limit, offset }) {
   }));
 }
 
-module.exports = { createOrder, getOrderById, listOrders };
+module.exports = { createOrder, getOrderById, listOrders, cancelOrder };

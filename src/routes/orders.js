@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const { validate } = require('../middleware/validate');
 const { createOrderSchema, orderIdParamSchema, listOrdersQuerySchema } = require('../schemas/order-schemas');
-const { createOrder, getOrderById, listOrders } = require('../services/order-service');
+const { createOrder, getOrderById, listOrders, cancelOrder } = require('../services/order-service');
 
 const router = Router();
 
@@ -26,6 +26,15 @@ router.get('/', validate({ query: listOrdersQuerySchema }), async (req, res, nex
 router.get('/:id', validate({ params: orderIdParamSchema }), async (req, res, next) => {
   try {
     const order = await getOrderById(req.params.id);
+    res.json(order);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/:id/cancel', validate({ params: orderIdParamSchema }), async (req, res, next) => {
+  try {
+    const order = await cancelOrder(req.params.id);
     res.json(order);
   } catch (err) {
     next(err);

@@ -216,6 +216,16 @@ curl -s localhost:3005/order/1
 curl -s localhost:3005/order/999999
 ```
 
+```bash
+# Cancel a PENDING order — inventory is restored, history gets a
+# PENDING -> CANCELLED row by CUSTOMER
+curl -s -X PATCH localhost:3005/order/1/cancel
+# Cancelling the same order again → 409 (no longer PENDING)
+curl -s -X PATCH localhost:3005/order/1/cancel
+# Unknown id → 404
+curl -s -X PATCH localhost:3005/order/999999/cancel
+```
+
 **Re-seeding**: `db/init.sql` runs only when the MySQL data volume is empty. To reset:
 
 ```bash
@@ -364,4 +374,23 @@ what issues were found, and how they were corrected. This log is appended to at 
   `GET /order/999999` → 404; `GET /order/abc` → 400 (non-numeric id rejected by
   `orderIdParamSchema`'s coercion).
 
-_(Entries for implementation steps 5–9 will be appended as they land.)_
+### Step 5 — `PATCH /order/:id/cancel` (2026-07-12) — Claude Code
+
+- **Used for**: generating `cancelOrder` in `src/services/order-service.js` and the
+  `PATCH /order/:id/cancel` route in `src/routes/orders.js` — the §5.2 transactional cancel
+  flow (CAS status flip, inventory restore, history row), reusing the existing
+  `orderIdParamSchema`; then manual verification against the dockerized stack.
+- **Beyond the plan, added by the AI and kept**: `getOrderById` and `cancelOrder` both need
+  the same order+items JOIN and row-shaping for their response; extracted into a shared
+  `ORDER_WITH_ITEMS_SQL` constant and `mapOrderRows` helper instead of duplicating the query
+  and mapping logic.
+- **Issues found during verification**: none requiring correction this step — the endpoint
+  passed all checks on the first build.
+- **Verification performed** (all passed): cancelling a PENDING order → `200`,
+  `status: CANCELLED`, inventory restored (verified before/after quantities), history row
+  `PENDING → CANCELLED` by `CUSTOMER`; cancelling the same order again → `409` with the
+  current status in `details`; unknown id → `404`; non-numeric id → `400`; the cancelled
+  order is excluded from the default `GET /order` list and appears under
+  `?order_status=CANCELLED`, matching Step 4's filter semantics.
+
+_(Entries for implementation steps 6–9 will be appended as they land.)_

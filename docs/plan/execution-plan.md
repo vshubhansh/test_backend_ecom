@@ -171,7 +171,7 @@ Full trade-off analysis in README §4.
   `GET /order/:id` with items array. Single JOIN-based queries; no N+1.
 - **Accept**: list shapes and filter/pagination semantics per contract; 404 on unknown id.
 
-### Step 5 — PATCH /order/:id/cancel
+### Step 5 — PATCH /order/:id/cancel ✅
 - **Scope**: §5.2 flow, `changed_by='CUSTOMER'`.
 - **Accept**: cancel on PENDING succeeds and restores inventory; cancel on any other status
   → 409; unknown id → 404.
