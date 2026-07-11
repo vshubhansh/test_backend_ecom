@@ -176,7 +176,7 @@ Full trade-off analysis in README §4.
 - **Accept**: cancel on PENDING succeeds and restores inventory; cancel on any other status
   → 409; unknown id → 404.
 
-### Step 6 — PATCH /order/:id/status
+### Step 6 — PATCH /order/:id/status ✅
 - **Scope**: §5.3 flow, `changed_by='ADMIN'` (code comment on future actor-id extension);
   rejects CANCELLED/PENDING targets with 400, non-successor targets with 409.
 - **Accept**: PENDING→PROCESSING→SHIPPED→DELIVERED each succeed stepwise; skip (PENDING→SHIPPED),

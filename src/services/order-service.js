@@ -232,6 +232,55 @@ async function cancelOrder(id) {
   });
 }
 
+// Sole valid predecessor for each forward-transition target — the CAS
+// UPDATE's WHERE clause enforces strict single-step (§5.3 of
+// docs/plan/execution-plan.md). PENDING/CANCELLED targets never reach here:
+// updateOrderStatusSchema already rejects them with 400.
+const STATUS_PREDECESSOR = {
+  PROCESSING: 'PENDING',
+  SHIPPED: 'PROCESSING',
+  DELIVERED: 'SHIPPED',
+};
+
+/**
+ * Advances an order exactly one step forward (e.g. PENDING -> PROCESSING).
+ * Same CAS + 404/409 disambiguation + history-row pattern as cancelOrder,
+ * keyed on the target's required predecessor instead of a fixed status.
+ * changed_by='ADMIN': the status API's default actor; extensible to a real
+ * actor id later, same convention as CUSTOMER/SYSTEM elsewhere.
+ */
+async function updateOrderStatus(id, status) {
+  const fromStatus = STATUS_PREDECESSOR[status];
+
+  return withTransaction(async (conn) => {
+    const [result] = await conn.execute(
+      'UPDATE orders SET status = :status WHERE id = :id AND status = :fromStatus',
+      { status, id, fromStatus }
+    );
+
+    if (result.affectedRows === 0) {
+      const [existing] = await conn.execute('SELECT status FROM orders WHERE id = :id', { id });
+      if (existing.length === 0) {
+        throw notFound('Order not found', { id });
+      }
+      throw conflict(`Order is not ${fromStatus} and cannot transition to ${status}`, {
+        id,
+        status: existing[0].status,
+        requested_status: status,
+      });
+    }
+
+    await conn.execute(
+      `INSERT INTO order_status_history (order_id, from_status, to_status, changed_by)
+       VALUES (:id, :fromStatus, :status, 'ADMIN')`,
+      { id, fromStatus, status }
+    );
+
+    const [rows] = await conn.execute(ORDER_WITH_ITEMS_SQL, { id });
+    return mapOrderRows(rows);
+  });
+}
+
 /**
  * Lists orders with status filter + pagination. Two queries total regardless
  * of page size: one page of orders, one batched items lookup keyed by the
@@ -294,4 +343,4 @@ async function listOrders({ order_status, limit, offset }) {
   }));
 }
 
-module.exports = { createOrder, getOrderById, listOrders, cancelOrder };
+module.exports = { createOrder, getOrderById, listOrders, cancelOrder, updateOrderStatus };

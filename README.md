@@ -231,6 +231,22 @@ curl -s -X PATCH localhost:3005/order/999999/cancel
 ```
 
 ```bash
+# Advance a PENDING order one step at a time — each history row is written
+# with changed_by='ADMIN'
+curl -s -X PATCH localhost:3005/order/2/status -H 'Content-Type: application/json' -d '{"status":"PROCESSING"}'
+curl -s -X PATCH localhost:3005/order/2/status -H 'Content-Type: application/json' -d '{"status":"SHIPPED"}'
+curl -s -X PATCH localhost:3005/order/2/status -H 'Content-Type: application/json' -d '{"status":"DELIVERED"}'
+# Skip a step (PENDING -> SHIPPED) → 409, not the immediate successor
+curl -s -X PATCH localhost:3005/order/3/status -H 'Content-Type: application/json' -d '{"status":"SHIPPED"}'
+# Move backwards (DELIVERED -> PROCESSING) → 409
+curl -s -X PATCH localhost:3005/order/2/status -H 'Content-Type: application/json' -d '{"status":"PROCESSING"}'
+# CANCELLED/PENDING as a target → 400 (only PROCESSING/SHIPPED/DELIVERED are accepted)
+curl -s -X PATCH localhost:3005/order/2/status -H 'Content-Type: application/json' -d '{"status":"CANCELLED"}'
+# Unknown id → 404
+curl -s -X PATCH localhost:3005/order/999999/status -H 'Content-Type: application/json' -d '{"status":"PROCESSING"}'
+```
+
+```bash
 # Watch the worker promote a PENDING order to PROCESSING. To see it without
 # waiting the default 5 minutes, set WORKER_INTERVAL_MS=5000 in .env and
 # `docker compose up --build -d` before placing the order below.
@@ -437,4 +453,28 @@ what issues were found, and how they were corrected. This log is appended to at 
   app` mid-interval still shuts down promptly with no "pool closed" errors, matching Step 2's
   graceful-shutdown behavior.
 
-_(Entries for implementation steps 6, 8–9 will be appended as they land.)_
+### Step 6 — `PATCH /order/:id/status` (2026-07-12) — Claude Code
+
+- **Used for**: generating `updateOrderStatus` in `src/services/order-service.js` and the
+  `PATCH /order/:id/status` route in `src/routes/orders.js` — the §5.3 CAS transition flow
+  keyed on a per-target predecessor map (`PROCESSING←PENDING`, `SHIPPED←PROCESSING`,
+  `DELIVERED←SHIPPED`), plus `updateOrderStatusSchema` in `src/schemas/order-schemas.js`
+  restricting the request body to `PROCESSING`/`SHIPPED`/`DELIVERED` so `CANCELLED` and
+  `PENDING` targets are rejected as `400`s at the validation layer rather than `409`s in the
+  service; then manual verification against the dockerized stack.
+- **Beyond the plan, added by the AI and kept**: reused the existing `ORDER_WITH_ITEMS_SQL` /
+  `mapOrderRows` helpers (already shared by `getOrderById` and `cancelOrder`) for the
+  response, so all three endpoints return the same order shape without duplicating the
+  read-back query.
+- **Issues found during verification**: none requiring correction this step — the endpoint
+  passed all checks on the first build.
+- **Verification performed** (all passed): a fresh order advances stepwise
+  `PENDING → PROCESSING → SHIPPED → DELIVERED`, each `200` with a matching
+  `order_status_history` row (`changed_by='ADMIN'`); skipping a step (`PENDING → SHIPPED`)
+  and moving backwards (`DELIVERED → PROCESSING`) both → `409` with the order's actual
+  current status in `details`; `CANCELLED` or `PENDING` as the request body → `400`
+  (schema-level rejection, distinct error shape from the `409`s); unknown id → `404`;
+  cancelling a `PENDING` order and then immediately attempting a status update on it → `409`
+  (CAS resolves the cancel-vs-status race the same way it resolves cancel-vs-worker).
+
+_(Entries for implementation steps 8–9 will be appended as they land.)_

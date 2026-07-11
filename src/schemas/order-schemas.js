@@ -32,4 +32,18 @@ const listOrdersQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().optional().default(0),
 });
 
-module.exports = { createOrderSchema, orderItemSchema, orderIdParamSchema, listOrdersQuerySchema };
+// PENDING and CANCELLED are deliberately excluded: PENDING isn't a valid
+// target for a transition, and CANCELLED is only reachable via the dedicated
+// cancel endpoint. Restricting the enum here rejects both with a 400 at the
+// validation layer instead of a 409 in the service.
+const updateOrderStatusSchema = z.object({
+  status: z.enum(['PROCESSING', 'SHIPPED', 'DELIVERED']),
+});
+
+module.exports = {
+  createOrderSchema,
+  orderItemSchema,
+  orderIdParamSchema,
+  listOrdersQuerySchema,
+  updateOrderStatusSchema,
+};
