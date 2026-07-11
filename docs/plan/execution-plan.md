@@ -38,7 +38,7 @@ Rules:
 - All transitions are enforced atomically in the `UPDATE`'s `WHERE` clause (CAS on the
   expected current status) — never read-then-write.
 
-`changed_by` values: `SYSTEM` (worker), `CUSTOMER` (cancel endpoint), `ADMIN` (status API
+`changed_by` values: `SYSTEM` (worker), `CUSTOMER` (order create and cancel endpoint), `ADMIN` (status API
 default). The field can be extended in future to carry a `customer_id` / actor id — e.g. to
 distinguish "customer cancelled the order" from "customer asked support to cancel it".
 
@@ -160,7 +160,7 @@ Full trade-off analysis in README §4.
   mapping typed errors → status codes; `GET /health` with a `SELECT 1` DB probe.
 - **Accept**: `GET /health` returns 200 with DB up; app boots clean in Docker.
 
-### Step 3 — POST /order
+### Step 3 — POST /order ✅
 - **Files**: `src/routes/orders.js`, `src/services/order-service.js` (or equivalent split).
 - **Scope**: §5.1 flow. Server-side pricing, atomic decrements, 201/400/404/409 per contract.
 - **Accept**: manual curl of happy path + shortfall path behaves per contract; order,

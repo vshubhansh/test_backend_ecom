@@ -88,7 +88,7 @@ CREATE TABLE order_items (
 
 -- ---------------------------------------------------------------------------
 -- order_status_history: audit trail for every status transition.
--- changed_by is SYSTEM (worker) | CUSTOMER (cancel endpoint) | ADMIN (status
+-- changed_by is SYSTEM (worker) | CUSTOMER (order create + cancel) | ADMIN (status
 -- API default). The field can be extended to carry a customer/actor id in
 -- future — e.g. to distinguish "customer cancelled the order" from "customer
 -- asked support to cancel the order".

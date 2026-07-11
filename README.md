@@ -88,7 +88,8 @@ Statuses carry ordinals — `PENDING:0`, `PROCESSING:1`, `SHIPPED:2`, `DELIVERED
 endpoint refuses it.
 
 Every transition writes an `order_status_history` row with `changed_by` set to `SYSTEM`
-(worker), `CUSTOMER` (cancel), or `ADMIN` (status API default). The field is designed to be
+(worker), `CUSTOMER` (order create — recorded as `NEW → PENDING` — and cancel), or `ADMIN`
+(status API default). The field is designed to be
 extended with an actor id later — e.g. to distinguish *customer cancelled the order* from
 *customer asked support to cancel it*.
 
@@ -185,6 +186,15 @@ docker compose up --build -d
   concurrency demo) and one out of stock ("Sold Out Speaker", for the 409 demo).
 
 ```bash
+# Place an order (server computes order_value from the catalog)
+curl -s -X POST localhost:3005/order \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"cust-1","payment_mode":"UPI","payment_status":"COMPLETE",
+       "items":[{"item_id":1,"quantity":2}]}'
+# → 201 with the created order (status PENDING)
+# item_id 6 ("Sold Out Speaker") → 409 insufficient inventory
+# unknown item_id → 404
+
 # Inspect the seeded data
 docker compose exec mysql mysql -uecom_app -p ecom \
   -e "SELECT i.id, i.name, inv.quantity FROM items i JOIN inventory inv ON inv.item_id=i.id;"
@@ -289,4 +299,31 @@ what issues were found, and how they were corrected. This log is appended to at 
   stop app` completes in ~1s with `SIGTERM received, shutting down` logged (graceful
   shutdown, no 10s kill timeout).
 
-_(Entries for implementation steps 3–9 will be appended as they land.)_
+### Step 3 — POST /order (2026-07-11) — Claude Code
+
+- **Used for**: generating `src/routes/orders.js`, `src/schemas/order-schemas.js`, and
+  `src/services/order-service.js` — the §5.1 transactional create flow (server-side price
+  lookup, atomic conditional inventory decrement, orders/order_items/history inserts); then
+  a separate AI review pass of the finished code against the execution plan and this README.
+- **Beyond the plan, added by the AI and kept**: duplicate `item_id` lines are merged before
+  decrementing (so shortfall checks stay correct for repeated ids); inventory decrements run
+  in ascending `item_id` order to avoid InnoDB lock-ordering deadlocks between concurrent
+  orders; money is summed in integer cents to avoid float drift.
+- **Issues the review found, and the corrections**:
+  1. *Doc drift on `changed_by`* — the service records the create-history row
+     (`NEW → PENDING`) with `changed_by='CUSTOMER'`, but the docs defined `CUSTOMER` as
+     "cancel endpoint" only. Docs corrected (§3 here, exec-plan §2, `db/init.sql` comment);
+     the code's choice was kept as the right semantics.
+  2. *Unbounded quantities* — an absurd `quantity` would overflow `DECIMAL(12,2)` and
+     surface as a 500 instead of a validation error. Added caps to the zod schema
+     (`quantity ≤ 10000`, ≤ 100 order lines) so it's a clean 400.
+  3. *Docs step scope initially skipped* — this log entry, the §7 curl example, and the
+     exec-plan tick were missing after the code landed; added as part of the review.
+- **Verification performed** (all passed): happy path → 201 with server-computed
+  `order_value` and PENDING status, inventory decremented, history row `NEW → PENDING` by
+  CUSTOMER; sold-out item → 409 with the failing `item_id`, transaction rolled back (no
+  partial order/inventory rows); unknown item → 404 with `unknown_item_ids`;
+  `expected_order_value` mismatch → 400 with expected vs. computed; over-cap quantity → 400
+  validation error.
+
+_(Entries for implementation steps 4–9 will be appended as they land.)_
