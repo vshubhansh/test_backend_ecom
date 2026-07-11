@@ -182,8 +182,8 @@ Full trade-off analysis in README §4.
 - **Accept**: PENDING→PROCESSING→SHIPPED→DELIVERED each succeed stepwise; skip (PENDING→SHIPPED),
   backwards (SHIPPED→PROCESSING), and CANCELLED-via-this-endpoint all rejected.
 
-### Step 7 — Worker
-- **Files**: `src/workers/order-status-worker.js`.
+### Step 7 — Worker ✅
+- **Files**: `src/workers/order-status-worker.js`, `src/server.js`.
 - **Scope**: §5.4. Interval configurable via env (5 min default; seconds in tests).
   BullMQ + Redis production design documented in a comment block and in the README.
 - **Accept**: PENDING orders flip to PROCESSING within one tick with history rows;

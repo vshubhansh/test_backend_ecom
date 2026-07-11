@@ -154,10 +154,14 @@ Full contract with request/response shapes: [`docs/plan/execution-plan.md`](docs
 
 ## 6. Background worker
 
-**Implemented**: an in-process `setInterval` (5 minutes, env-configurable) that promotes all
-`PENDING` orders to `PROCESSING` in a single set-based UPDATE inside a transaction, writes
-`order_status_history` rows (`changed_by = 'SYSTEM'`), and guards against overlapping ticks.
-One SQL statement moves the whole batch — no per-row discovery loop.
+**Implemented** (`src/workers/order-status-worker.js`): an in-process `setInterval` (5
+minutes, env-configurable via `WORKER_INTERVAL_MS`) that promotes all `PENDING` orders to
+`PROCESSING` in one transaction — `SELECT ... FOR UPDATE` snapshots the affected ids, a
+single set-based `UPDATE` moves them all, one bulk `INSERT` writes their
+`order_status_history` rows (`changed_by = 'SYSTEM'`) — and guards against overlapping ticks
+with an in-process flag (a tick still running when the next timer fires is skipped, not
+queued). No per-row discovery loop; a tick with zero PENDING orders is a cheap read-only pass that
+skips the UPDATE/INSERT entirely.
 
 **Production design (documented, not implemented)**: a **BullMQ + Redis** setup — a
 repeatable job scheduled every 5 minutes enqueues status-update jobs; workers consume them
@@ -224,6 +228,23 @@ curl -s -X PATCH localhost:3005/order/1/cancel
 curl -s -X PATCH localhost:3005/order/1/cancel
 # Unknown id → 404
 curl -s -X PATCH localhost:3005/order/999999/cancel
+```
+
+```bash
+# Watch the worker promote a PENDING order to PROCESSING. To see it without
+# waiting the default 5 minutes, set WORKER_INTERVAL_MS=5000 in .env and
+# `docker compose up --build -d` before placing the order below.
+curl -s -X POST localhost:3005/order \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"cust-1","payment_mode":"UPI","payment_status":"COMPLETE",
+       "items":[{"item_id":1,"quantity":1}]}'
+# → id in the response body; wait one tick, then:
+curl -s localhost:3005/order/<id>
+# → status: "PROCESSING"
+
+# Confirm the SYSTEM-authored history row
+docker compose exec mysql mysql -uecom_app -p ecom \
+  -e "SELECT order_id, from_status, to_status, changed_by, changed_at FROM order_status_history WHERE changed_by='SYSTEM';"
 ```
 
 **Re-seeding**: `db/init.sql` runs only when the MySQL data volume is empty. To reset:
@@ -393,4 +414,27 @@ what issues were found, and how they were corrected. This log is appended to at 
   order is excluded from the default `GET /order` list and appears under
   `?order_status=CANCELLED`, matching Step 4's filter semantics.
 
-_(Entries for implementation steps 6–9 will be appended as they land.)_
+### Step 7 — Background worker (2026-07-12) — Claude Code
+
+- **Used for**: generating `src/workers/order-status-worker.js` — the §5.4 promotion flow
+  (`SELECT ... FOR UPDATE` to snapshot affected ids, a single set-based `UPDATE`, one bulk
+  `INSERT` for the `order_status_history` rows, all in one transaction), the in-process
+  overlap guard, and the `start()`/`stop()` wiring into `src/server.js`'s listen/shutdown
+  lifecycle; then manual verification against the dockerized stack with a shortened interval.
+- **Beyond the plan, added by the AI and kept**: `promotePendingOrders()` (the pure
+  transactional tick) is exported separately from `runWorkerTick()` (the overlap-guarded
+  wrapper the interval calls), so a single tick can be invoked directly without waiting on a
+  real timer — needed for Step 8's tests. `stop()` is `async` and awaits any in-flight tick
+  before returning, so graceful shutdown never races a live transaction against `pool.end()`.
+- **Issues found during verification**: none requiring correction this step — the worker
+  passed all checks on the first build.
+- **Verification performed** (all passed): with `WORKER_INTERVAL_MS=5000`, a freshly created
+  PENDING order flips to `PROCESSING` within one tick (`GET /order/:id`); a matching
+  `order_status_history` row (`PENDING → PROCESSING`, `changed_by='SYSTEM'`) is written; a
+  tick with zero PENDING orders skips the UPDATE/INSERT (logging `promoted 0 order(s)`)
+  within a short read-only transaction; forcing two overlapping ticks confirms the second is skipped
+  (`"previous tick still running"` logged, no duplicate history row); `docker compose stop
+  app` mid-interval still shuts down promptly with no "pool closed" errors, matching Step 2's
+  graceful-shutdown behavior.
+
+_(Entries for implementation steps 6, 8–9 will be appended as they land.)_
